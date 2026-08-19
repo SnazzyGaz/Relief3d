@@ -31,15 +31,6 @@ An orthographic camera renders the model to a linear depth map: near = light, fa
 
 Everything runs client-side; nothing leaves the browser.
 
-## Deploy on GitHub Pages
-
-1. Create a repo and add `index.html`, `README.md`, `LICENSE`, and `.nojekyll`.
-2. Push to the `main` branch.
-3. Repo **Settings → Pages → Build and deployment**: Source = *Deploy from a branch*, Branch = `main`, folder = `/ (root)`.
-4. Wait for the build, then visit `https://<your-username>.github.io/<your-repo>/`.
-
-The `.nojekyll` file tells Pages to serve the files as-is rather than running them through Jekyll.
-
 ## Dependencies
 
 Loaded at runtime from cdnjs (no build step, no bundling):
