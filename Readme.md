@@ -2,7 +2,7 @@
 
 Turn an STL or OBJ model into a greyscale **depth map** (8- or 16-bit PNG) for bas-relief CNC routing and laser engraving — entirely in the browser, no upload, no install. Includes a lit 3D preview that shows how the map will actually carve.
 
-**Live:** `https://<your-username>.github.io/<your-repo>/`
+**Live:** https://snazzygaz.github.io/Relief3d/
 
 ## What it does
 
