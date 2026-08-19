@@ -1,0 +1,1274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReliefGen — depth maps from 3D</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<style>
+  :root{
+    --bg:#0d0f12; --panel:#14171c; --panel2:#181c22; --line:#252b33;
+    --txt:#c6ccd4; --dim:#6c7682; --dimmer:#454d57;
+    --accent:#33c9c1; --accent-dim:#1c6b68;
+    --readout:#8bd47a;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font-family:var(--sans);overflow:hidden}
+  #app{display:flex;height:100vh;width:100vw}
+  /* ---- viewport ---- */
+  #stage{flex:1;position:relative;min-width:0}
+  #stage canvas{display:block;width:100%;height:100%}
+  #reticle{position:absolute;inset:0;pointer-events:none}
+  #hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+        flex-direction:column;gap:14px;color:var(--dim);pointer-events:none;text-align:center;padding:24px}
+  #hint .big{font-size:15px;letter-spacing:.02em}
+  #hint .sub{font-size:12px;color:var(--dimmer);font-family:var(--mono)}
+  #hint.hide{display:none}
+  #dropveil{position:absolute;inset:8px;border:1.5px dashed var(--accent);border-radius:8px;
+            display:none;align-items:center;justify-content:center;background:rgba(51,201,193,.06);
+            color:var(--accent);font-family:var(--mono);font-size:13px;pointer-events:none}
+  #dropveil.show{display:flex}
+  #badge{position:absolute;left:14px;bottom:12px;font-family:var(--mono);font-size:11px;color:var(--dim);
+         line-height:1.7;pointer-events:none;user-select:none}
+  #badge b{color:var(--readout);font-weight:500}
+  /* ---- panel ---- */
+  #panel{width:300px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+         display:flex;flex-direction:column;overflow-y:auto}
+  .brand{padding:16px 18px 14px;border-bottom:1px solid var(--line)}
+  .brand h1{margin:0;font-size:13px;letter-spacing:.14em;text-transform:uppercase;font-weight:600}
+  .brand h1 span{color:var(--accent)}
+  .brand p{margin:5px 0 0;font-size:11px;color:var(--dim);font-family:var(--mono)}
+  .grp{padding:14px 18px;border-bottom:1px solid var(--line)}
+  .grp h2{margin:0 0 12px;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0}
+  .row label{font-size:12px;color:var(--txt)}
+  .val{font-family:var(--mono);font-size:12px;color:var(--readout);min-width:52px;text-align:right}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:2px;background:var(--line);outline:none;margin:0}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;
+        background:var(--accent);cursor:pointer;border:2px solid var(--panel)}
+  input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--panel)}
+  .slider-row{margin:12px 0}
+  .slider-row .top{display:flex;justify-content:space-between;margin-bottom:7px}
+  select,button{font-family:var(--sans);font-size:12px}
+  select{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:5px;padding:6px 8px;cursor:pointer}
+  .seg{display:flex;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+  .seg button{flex:1;background:var(--panel2);color:var(--dim);border:none;padding:6px 4px;cursor:pointer;border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:none}
+  .seg button.on{background:var(--accent-dim);color:#eafffe}
+  .chk{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;user-select:none}
+  .chk input{accent-color:var(--accent);width:14px;height:14px}
+  .views{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .views button{background:var(--panel2);color:var(--dim);border:1px solid var(--line);border-radius:5px;padding:7px 0;cursor:pointer}
+  .views button:hover{color:var(--txt);border-color:var(--dimmer)}
+  .actions{padding:16px 18px;margin-top:auto}
+  .btn-primary{width:100%;background:var(--accent);color:#04201f;border:none;border-radius:6px;padding:11px;
+        font-weight:600;font-size:13px;cursor:pointer;letter-spacing:.03em}
+  .btn-primary:hover{background:#43ded6}
+  .btn-primary:disabled{background:var(--line);color:var(--dimmer);cursor:not-allowed}
+  .btn-ghost{width:100%;background:transparent;color:var(--dim);border:1px solid var(--line);border-radius:6px;
+        padding:9px;font-size:12px;cursor:pointer;margin-top:8px}
+  .btn-ghost:hover{color:var(--txt);border-color:var(--dimmer)}
+  .note{font-size:10.5px;color:var(--dimmer);font-family:var(--mono);line-height:1.6;margin-top:10px}
+  #file{display:none}
+  .stat{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--dim);margin:4px 0}
+  .stat b{color:var(--readout);font-weight:500}
+  /* ---- lit 3D view ---- */
+  #litCanvas{position:absolute;inset:0;width:100%;height:100%;background:transparent}
+  #stage #litCanvas{display:none}
+  #stage.lit #litCanvas{display:block}
+  #stage.lit #reticle{display:none}
+  #viewToggle{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:180px;z-index:6;
+              background:rgba(20,23,28,.82);backdrop-filter:blur(6px);display:none}
+  /* view switch now lives as tabs at the top of the panel */
+  .tabs{display:flex;gap:6px;padding:12px 18px;border-bottom:1px solid var(--line)}
+  .tabs button{flex:1;background:var(--panel2);color:var(--dim);border:1px solid var(--line);border-radius:6px;
+               padding:9px 0;cursor:pointer;font-weight:600;font-size:12px;letter-spacing:.02em}
+  .tabs button:hover{color:var(--txt);border-color:var(--dimmer)}
+  .tabs button.on{background:var(--accent);color:#04201f;border-color:var(--accent)}
+  #viewTabs{display:none}
+  #stage.hasmodel ~ #panel #viewTabs, #panel.hasmodel #viewTabs{display:flex}
+  .litonly{display:none}
+  #panel.lit .litonly{display:block}
+  #panel.lit .depthonly{display:none}
+  /* light pad */
+  .pad{position:relative;width:100%;aspect-ratio:1/0.74;border:1px solid var(--line);border-radius:7px;
+       overflow:hidden;cursor:crosshair;touch-action:none;user-select:none;margin-top:4px;
+       background:
+         radial-gradient(90% 130% at 50% 118%, rgba(51,201,193,.10), transparent 60%),
+         repeating-radial-gradient(circle at 50% 118%, transparent 0 21px, rgba(255,255,255,.045) 21px 22px),
+         linear-gradient(180deg,#161a1f,#0f1216);}
+  .pad .horizon{position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--line)}
+  .padhandle{position:absolute;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;
+       background:radial-gradient(circle at 34% 32%,#eafffe,var(--accent) 60%);
+       box-shadow:0 0 0 2px #04201f,0 0 16px 4px rgba(51,201,193,.5);pointer-events:none}
+  .padlabel{position:absolute;font-family:var(--mono);font-size:8.5px;color:var(--dimmer);
+       letter-spacing:.4px;pointer-events:none;text-transform:uppercase}
+  .padlabel.t{top:6px;left:50%;transform:translateX(-50%)}
+  .padlabel.b{bottom:5px;left:50%;transform:translateX(-50%)}
+  .padlabel.l{left:6px;top:50%;transform:translateY(-50%)}
+  .padlabel.r{right:6px;top:50%;transform:translateY(-50%)}
+  #lightPos{font-family:var(--mono);font-size:10.5px;color:var(--readout);text-align:center;margin-top:8px}
+  #plainColor{-webkit-appearance:none;appearance:none;width:46px;height:26px;padding:0;border:1px solid var(--line);border-radius:5px;background:var(--panel2);cursor:pointer}
+  #plainColor::-webkit-color-swatch-wrapper{padding:3px}
+  #plainColor::-webkit-color-swatch{border:none;border-radius:3px}
+  #plainColor::-moz-color-swatch{border:none;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div id="hint"><div class="big">Drop an STL or OBJ to begin</div><div class="sub">or use Import model →</div></div>
+    <div id="dropveil">release to load</div>
+    <svg id="reticle"></svg>
+    <canvas id="litCanvas"></canvas>
+    <div id="viewToggle" class="seg">
+      <button data-view-mode="depth" class="on">Depth</button>
+      <button data-view-mode="lit">Lit 3D</button>
+    </div>
+    <div id="badge"></div>
+  </div>
+
+  <div id="panel">
+    <div class="brand">
+      <h1>Relief<span>Gen</span></h1>
+      <p>orthographic depth &rarr; 16-bit PNG</p>
+    </div>
+
+    <div class="tabs" id="viewTabs">
+      <button data-view-mode="depth" class="on">Depth map</button>
+      <button data-view-mode="lit">Lit 3D</button>
+    </div>
+
+    <div class="grp">
+      <h2>Model</h2>
+      <button class="btn-ghost" id="importBtn">Import model…</button>
+      <input type="file" id="file" accept=".stl,.obj">
+      <div class="stat"><span>triangles</span><b id="statTris">—</b></div>
+      <div class="stat"><span>depth range</span><b id="statDepth">—</b></div>
+    </div>
+
+    <div class="grp">
+      <h2>View angle</h2>
+      <div class="views">
+        <button data-view="top">Top</button>
+        <button data-view="front">Front</button>
+        <button data-view="left">Left</button>
+        <button data-view="iso">Iso</button>
+        <button data-view="right">Right</button>
+        <button data-view="back">Back</button>
+      </div>
+      <button class="btn-ghost" id="fitBtn" style="margin-top:10px">Fit to frame</button>
+      <label class="chk" style="margin-top:12px"><input type="checkbox" id="previewChk"> Depth preview</label>
+      <div class="note">Scroll to zoom · drag to orbit. The square you see is exactly what's exported.</div>
+    </div>
+
+    <div class="grp">
+      <h2>Transform</h2>
+      <div class="slider-row">
+        <div class="top"><label>Move X</label><span class="val" id="mxVal">0</span></div>
+        <input type="range" id="mx" min="-100" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Move Y</label><span class="val" id="myVal">0</span></div>
+        <input type="range" id="my" min="-100" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Move Z</label><span class="val" id="mzVal">0</span></div>
+        <input type="range" id="mz" min="-100" max="100" value="0">
+      </div>
+      <div class="slider-row" style="margin-top:14px">
+        <div class="top"><label>Rotate X</label><span class="val" id="rxVal">0°</span></div>
+        <input type="range" id="rx" min="-180" max="180" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Rotate Y</label><span class="val" id="ryVal">0°</span></div>
+        <input type="range" id="ry" min="-180" max="180" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Rotate Z</label><span class="val" id="rzVal">0°</span></div>
+        <input type="range" id="rz" min="-180" max="180" value="0">
+      </div>
+      <button class="btn-ghost" id="resetXform" style="margin-top:6px">Reset transform</button>
+    </div>
+
+    <div class="grp">
+      <h2>Framing</h2>
+      <div class="slider-row">
+        <div class="top"><label>Padding</label><span class="val" id="padVal">6%</span></div>
+        <input type="range" id="pad" min="0" max="30" value="6">
+      </div>
+    </div>
+
+    <div class="grp">
+      <h2>Depth window</h2>
+      <label class="chk"><input type="checkbox" id="showPlaneChk" checked> Show window</label>
+      <div class="slider-row" style="margin-top:12px">
+        <div class="top"><label>Plane cut (floor)</label><span class="val" id="planeVal">0%</span></div>
+        <input type="range" id="plane" min="0" max="95" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Ceiling</label><span class="val" id="ceilVal">0%</span></div>
+        <input type="range" id="ceil" min="0" max="95" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Ceiling rolloff</label><span class="val" id="rollVal">0%</span></div>
+        <input type="range" id="roll" min="0" max="80" value="0">
+      </div>
+      <div class="note">Floor (grey) drops the far side to zero. Ceiling (blue) tops out the range — the surface between the walls fills black→white, so lowering the ceiling crams contrast into your subject. Rolloff scales the over-ceiling geometry into a thin band below the top instead of clipping it flat, so a raised fist stays a feature.</div>
+    </div>
+
+    <div class="grp">
+      <h2>Depth curve</h2>
+      <label class="chk"><input type="checkbox" id="invertChk"> Invert (high = far)</label>
+      <div class="slider-row" style="margin-top:14px">
+        <div class="top"><label>Gamma</label><span class="val" id="gammaVal">1.00</span></div>
+        <input type="range" id="gamma" min="30" max="300" value="100">
+      </div>
+    </div>
+
+    <div class="grp">
+      <h2>Relief detail</h2>
+      <div class="slider-row">
+        <div class="top"><label>Smoothing</label><span class="val" id="smoothVal">0</span></div>
+        <input type="range" id="smooth" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Edge depth</label><span class="val" id="edgeVal">0.0</span></div>
+        <input type="range" id="edge" min="0" max="300" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Edge width</label><span class="val" id="edgeWVal">8px</span></div>
+        <input type="range" id="edgeW" min="1" max="40" value="8">
+      </div>
+      <div class="note">Smoothing removes stepping in flats; Edge depth deepens transitions (width = how broad a transition counts). Applied on Generate.</div>
+    </div>
+
+    <div class="grp">
+      <h2>Local detail</h2>
+      <div class="slider-row">
+        <div class="top"><label>Detail boost</label><span class="val" id="detailGVal">0</span></div>
+        <input type="range" id="detailG" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Flatten base</label><span class="val" id="baseCompVal">0%</span></div>
+        <input type="range" id="baseComp" min="0" max="90" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Detail size</label><span class="val" id="detailSizeVal">35</span></div>
+        <input type="range" id="detailSize" min="0" max="100" value="35">
+      </div>
+      <div class="note">Splits the map into a big base shape and fine detail. Flatten base compresses the overall projection (so a jutting jaw stops hogging the range); Detail boost lifts the local transitions (tooth gaps, sutures); Detail size sets how large a feature counts as "base". Best judged in the Lit 3D tab. Applied on Generate.</div>
+    </div>
+
+    <div class="grp">
+      <h2>Output</h2>
+      <div class="slider-row">
+        <div class="top"><label>Clip highs</label><span class="val" id="rangeClipHiVal">0.5%</span></div>
+        <input type="range" id="rangeClipHi" min="0" max="50" value="5">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Clip lows</label><span class="val" id="rangeClipLoVal">0.5%</span></div>
+        <input type="range" id="rangeClipLo" min="0" max="50" value="5">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Output floor</label><span class="val" id="outFloorVal">0%</span></div>
+        <input type="range" id="outFloor" min="0" max="90" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Output ceiling</label><span class="val" id="outCeilVal">0%</span></div>
+        <input type="range" id="outCeil" min="0" max="90" value="0">
+      </div>
+      <label class="chk"><input type="checkbox" id="ditherChk" checked> Dither (anti-banding)</label>
+      <div class="note" style="margin-bottom:12px">Clip highs trims the tallest/brightest outliers, Clip lows the deepest/darkest — independently, so you can fill the range from whichever end has wasted headroom. Dither removes contour banding on shallow gradients.</div>
+      <div class="row"><label>Resolution</label>
+        <select id="res">
+          <option>512</option><option>1024</option><option selected>2048</option>
+          <option>4096</option><option>8192</option>
+        </select>
+      </div>
+      <div class="row"><label>Bit depth</label>
+        <div class="seg" id="bitSeg">
+          <button data-bit="16" class="on">16-bit</button>
+          <button data-bit="8">8-bit</button>
+        </div>
+      </div>
+      <div class="row"><label>Supersample</label>
+        <div class="seg" id="ssSeg">
+          <button data-ss="1" class="on">1×</button>
+          <button data-ss="2">2×</button>
+        </div>
+      </div>
+      <div class="note">Supersample softens silhouettes (averages edge depth). Keep 1× for crisp CNC cliffs.</div>
+    </div>
+
+    <div class="grp litonly">
+      <h2>Lighting</h2>
+      <div class="pad" id="lightPad">
+        <div class="horizon"></div>
+        <div class="padhandle" id="lightHandle"></div>
+        <div class="padlabel t">high</div><div class="padlabel b">grazing</div>
+        <div class="padlabel l">left</div><div class="padlabel r">right</div>
+      </div>
+      <div id="lightPos">az 0°  el 45°</div>
+      <div class="slider-row" style="margin-top:12px">
+        <div class="top"><label>Brightness</label><span class="val" id="brightVal">1.2</span></div>
+        <input type="range" id="bright" min="20" max="300" value="120">
+      </div>
+      <div class="note">Drag the pad to rake the light across the relief. This is a shaded preview only — it never changes the depth data.</div>
+    </div>
+
+    <div class="grp litonly">
+      <h2>Material &amp; board</h2>
+      <div class="row"><label>Material</label>
+        <div class="seg" id="matSeg">
+          <button data-mat="plain">Plain</button>
+          <button data-mat="wood">Wood</button>
+          <button data-mat="steel" class="on">Steel</button>
+        </div>
+      </div>
+      <div class="row" id="plainRow" style="display:none"><label>Plain colour</label>
+        <input type="color" id="plainColor" value="#cfd3d8">
+      </div>
+      <div class="slider-row" style="margin-top:12px">
+        <div class="top"><label>Relief height</label><span class="val" id="lheightVal">14</span></div>
+        <input type="range" id="lheight" min="1" max="60" value="14">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Base thickness</label><span class="val" id="lthickVal">6</span></div>
+        <input type="range" id="lthick" min="0" max="40" value="6">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>Detail (grid)</label><span class="val" id="lresVal">320</span></div>
+        <input type="range" id="lres" min="120" max="600" value="320" step="20">
+      </div>
+      <label class="chk" style="margin-top:6px"><input type="checkbox" id="lspin"> Auto-spin</label>
+      <button class="btn-ghost" id="lstlBtn" style="margin-top:10px">Export board STL</button>
+      <div class="note">Relief height is the carve depth of the board preview. Drag to orbit, scroll to zoom.</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" id="genBtn" disabled>Generate depth map</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------------------
+// State + three.js setup
+// ---------------------------------------------------------------------------
+const stage   = document.getElementById('stage');
+const reticle = document.getElementById('reticle');
+const badge   = document.getElementById('badge');
+const hintEl  = document.getElementById('hint');
+const veil    = document.getElementById('dropveil');
+
+let renderer, scene, cam, mesh, matNormal, matPreview, matPack, planeMesh, ceilMesh;
+let center = new THREE.Vector3(), corners = [], fitRadius = 1, modelScale = 1;
+let theta = Math.PI*0.25, phi = Math.PI*0.32;     // orbit angles
+let uNear = 0, uFar = 1;                            // current view-space depth extent
+let baseHalf = 1, zoom = 1;                         // fixed frame half-extent + manual zoom
+let squareVP = {x:0,y:0,s:1};                       // centred square viewport (CSS px)
+const xf = { mx:0, my:0, mz:0, rx:0, ry:0, rz:0 };  // model transform (units / radians)
+const ui = { pad:0.06, gamma:1, plane:0, ceil:0, roll:0, smooth:0, edge:0, edgeW:8, detailSize:0.35, baseComp:0, detailG:1, rangeClipLo:0.5, rangeClipHi:0.5, outFloor:0, outCeil:0, _clipLo:0, _clipHi:1, dither:true, invert:false, preview:false, showPlane:true };
+let lastClipSig='';
+
+// ===========================================================================
+// Lit 3D preview — isolated renderer/scene/camera, fed by the current
+// processed depth (depthToCanvas). Its own WebGL context, so it never touches
+// reliefgen's renderer state. Ported from the standalone board previewer.
+// ===========================================================================
+const LIT = (function(){
+  const T = THREE;
+  let inited=false, _active=false, ren=null, scn=null, camera=null, canvas=null;
+  let boardMesh=null, material=null, key=null, GEO=null, needsRender=false;
+  let needTopo=false, needResample=false, needGeo=false, needMat=false, last=performance.now();
+  const S={ source:null, H:null, nx:0, ny:0, aspect:1, boardW:160, boardD:160,
+    params:{ res:320, height:14, thick:6, size:160, invert:false, material:'steel',
+      plainColor:'#cfd3d8', tone:50, grain:50, finish:0.4, bright:1.2, lnx:0.32, lny:0.62, spin:false } };
+  const cam={ target:new T.Vector3(0,0,0), radius:300, theta:0, phi:0.82, minR:40, maxR:3000 };
+
+  const NS=256,NMASK=255,NOISE=new Float32Array(NS*NS);
+  for(let i=0;i<NOISE.length;i++)NOISE[i]=Math.random();
+  const hash=(x,y)=>NOISE[((y&NMASK)*NS)+(x&NMASK)];
+  function vnoise(x,y){const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi;
+    const u=xf*xf*(3-2*xf),v=yf*yf*(3-2*yf);
+    const a=hash(xi,yi),b=hash(xi+1,yi),c=hash(xi,yi+1),d=hash(xi+1,yi+1);
+    return a*(1-u)*(1-v)+b*u*(1-v)+c*(1-u)*v+d*u*v;}
+  function fbm(x,y){let s=0,a=0.5,f=1;for(let i=0;i<5;i++){s+=a*vnoise(x*f,y*f);f*=2;a*=0.5;}return s;}
+  const lerp3=(a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];
+  const mul3=(a,k)=>[a[0]*k,a[1]*k,a[2]*k];
+  const cl255=v=>Math.max(0,Math.min(255,v));
+
+  function init(){
+    canvas=document.getElementById('litCanvas');
+    ren=new T.WebGLRenderer({canvas,antialias:true,alpha:true});
+    ren.setPixelRatio(Math.min(window.devicePixelRatio,2));
+    ren.shadowMap.enabled=true; ren.shadowMap.type=T.PCFSoftShadowMap;
+    if(T.sRGBEncoding) ren.outputEncoding=T.sRGBEncoding;
+    if(T.ACESFilmicToneMapping){ ren.toneMapping=T.ACESFilmicToneMapping; ren.toneMappingExposure=1.05; }
+    scn=new T.Scene();
+    camera=new T.PerspectiveCamera(42,1,1,7000);
+    key=new T.DirectionalLight(0xffffff,S.params.bright); key.castShadow=true;
+    key.shadow.mapSize.set(1024,1024); key.shadow.camera.near=10; key.shadow.camera.far=2000;
+    const sc=280; key.shadow.camera.left=-sc;key.shadow.camera.right=sc;key.shadow.camera.top=sc;key.shadow.camera.bottom=-sc;
+    key.shadow.bias=-0.0004; key.shadow.normalBias=0.6; scn.add(key);
+    const fill=new T.DirectionalLight(0x9fb6d0,0.35); fill.position.set(-160,90,-120); scn.add(fill);
+    const rim=new T.DirectionalLight(0xffd9a0,0.5); rim.position.set(-40,60,-200); scn.add(rim);
+    scn.add(new T.AmbientLight(0x404650,0.45));
+    material=new T.MeshStandardMaterial({roughness:0.62,metalness:0.0});
+    makeEnv(); makeMaterial(); setLight(); bindOrbit(); bindPad(); bindControls();
+    inited=true; resize(); requestAnimationFrame(loop);
+  }
+  function makeEnv(){
+    const c=document.createElement('canvas');c.width=256;c.height=128;const ctx=c.getContext('2d');
+    const g=ctx.createLinearGradient(0,0,0,128);g.addColorStop(0,'#e4ebf2');g.addColorStop(.55,'#98a2ad');g.addColorStop(1,'#33363b');
+    ctx.fillStyle=g;ctx.fillRect(0,0,256,128);
+    const rg=ctx.createRadialGradient(78,26,2,78,26,58);rg.addColorStop(0,'rgba(255,255,255,.95)');rg.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=rg;ctx.fillRect(0,0,256,128);
+    const tex=new T.CanvasTexture(c);tex.mapping=T.EquirectangularReflectionMapping;
+    const pm=new T.PMREMGenerator(ren);scn.environment=pm.fromEquirectangular(tex).texture;tex.dispose();pm.dispose();
+  }
+  function applyCam(){
+    const sp=Math.sin(cam.phi),cp=Math.cos(cam.phi),st=Math.sin(cam.theta),ct=Math.cos(cam.theta);
+    camera.position.set(cam.target.x+cam.radius*sp*st,cam.target.y+cam.radius*cp,cam.target.z+cam.radius*sp*ct);
+    camera.lookAt(cam.target); needsRender=true;
+  }
+  function frameCamera(){
+    const p=S.params,span=Math.max(S.boardW,S.boardD,p.thick+p.height);
+    cam.target.set(0,(p.thick+p.height)*0.35,0); cam.radius=span*1.7; cam.theta=0; cam.phi=0.82; applyCam();
+  }
+  function bindOrbit(){
+    let mode=0,px=0,py=0; const clampR=r=>Math.max(cam.minR,Math.min(cam.maxR,r));
+    canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);mode=(e.button===2||e.button===1||e.shiftKey)?2:1;px=e.clientX;py=e.clientY;});
+    canvas.addEventListener('pointermove',e=>{
+      if(!mode)return;const dx=e.clientX-px,dy=e.clientY-py;px=e.clientX;py=e.clientY;
+      if(mode===1){cam.theta-=dx*0.008;cam.phi=Math.max(0.05,Math.min(Math.PI-0.05,cam.phi-dy*0.008));applyCam();}
+      else{const k=cam.radius*0.0016,right=new T.Vector3().subVectors(camera.position,cam.target).cross(camera.up).normalize();
+        cam.target.addScaledVector(right,-dx*k);cam.target.addScaledVector(camera.up.clone(),dy*k);applyCam();}
+    });
+    window.addEventListener('pointerup',()=>mode=0);
+    canvas.addEventListener('wheel',e=>{e.preventDefault();cam.radius=clampR(cam.radius*(e.deltaY>0?1.1:0.9));applyCam();},{passive:false});
+    canvas.addEventListener('contextmenu',e=>e.preventDefault());
+  }
+  let curMaps=[];
+  function disposeMaps(){curMaps.forEach(t=>t&&t.dispose());curMaps=[];}
+  function canvasTex(cvs,srgb){const t=new T.CanvasTexture(cvs);if(srgb&&T.sRGBEncoding)t.encoding=T.sRGBEncoding;t.anisotropy=ren.capabilities.getMaxAnisotropy();curMaps.push(t);return t;}
+  function applyShading(){
+    const m=S.params.material,sheen=S.params.finish;let rough=.7,metal=0,env=.3;
+    if(m==='wood'){rough=.72-sheen*.5;env=.35;} if(m==='steel'){rough=.55-sheen*.45;metal=.92;env=1;} if(m==='plain'){rough=.9-sheen*.7;env=.25;}
+    material.roughness=Math.max(.05,rough);material.metalness=metal;material.envMapIntensity=env;material.needsUpdate=true;needsRender=true;
+  }
+  function makeMaterial(){
+    disposeMaps();const m=S.params.material;material.map=null;material.bumpMap=null;material.roughnessMap=null;material.color.setRGB(1,1,1);
+    if(m==='plain'){material.color.set(S.params.plainColor);applyShading();return;}
+    const N=1024;
+    const col=document.createElement('canvas');col.width=col.height=N;const cimg=col.getContext('2d').createImageData(N,N);
+    const bmp=document.createElement('canvas');bmp.width=bmp.height=N;const bimg=bmp.getContext('2d').createImageData(N,N);
+    const rgh=document.createElement('canvas');rgh.width=rgh.height=N;const rimg=rgh.getContext('2d').createImageData(N,N);
+    const tone=S.params.tone/100,gr=S.params.grain/100;
+    for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+      const u=x/N,v=y/N,i=(y*N+x)*4;let c,bumpV=128,roughV=128;
+      if(m==='wood'){
+        const grain=.5+gr*3.5,warp=fbm(u*4,v*4)*.35,rings=Math.sin((v*grain*6+warp*6+fbm(u*2.2,v*2.2)*2)*Math.PI);
+        let t=Math.pow(.5+.5*rings,1.4);const streak=fbm(u*90,v*8)*.16;t=Math.max(0,Math.min(1,t-streak));
+        const pale=[214,178,120],mid=[168,120,64],dark=[92,58,30];
+        const base=tone<.5?lerp3(pale,mid,tone*2):lerp3(mid,dark,(tone-.5)*2);
+        c=lerp3(mul3(base,.62),mul3(base,1.12),t);bumpV=128+(t-.5)*150-streak*120;
+      } else {
+        const streak=fbm(u*420,v*3),dust=hash(Math.floor(u*N),Math.floor(v*N*.15))*.5;
+        let t=.5+(streak-.5)*(.6+gr*.8)+(dust-.25)*.15;t=Math.max(0,Math.min(1,t));
+        const light=[196,199,204],darkC=[104,108,116],base=lerp3(light,darkC,tone);
+        c=lerp3(mul3(base,.85),mul3(base,1.1),t);bumpV=128+(t-.5)*40;roughV=90+(1-t)*110;
+      }
+      cimg.data[i]=cl255(c[0]);cimg.data[i+1]=cl255(c[1]);cimg.data[i+2]=cl255(c[2]);cimg.data[i+3]=255;
+      const b=cl255(bumpV);bimg.data[i]=bimg.data[i+1]=bimg.data[i+2]=b;bimg.data[i+3]=255;
+      const r=cl255(roughV);rimg.data[i]=rimg.data[i+1]=rimg.data[i+2]=r;rimg.data[i+3]=255;
+    }
+    col.getContext('2d').putImageData(cimg,0,0);bmp.getContext('2d').putImageData(bimg,0,0);rgh.getContext('2d').putImageData(rimg,0,0);
+    material.map=canvasTex(col,true);material.bumpMap=canvasTex(bmp,false);material.bumpScale=m==='steel'?.12:.35;
+    if(m==='steel')material.roughnessMap=canvasTex(rgh,false);applyShading();
+  }
+  const _rs=document.createElement('canvas'),_rc=_rs.getContext('2d',{willReadFrequently:true});
+  function gridDims(){const aspect=S.source.w/S.source.h,r=Math.round(S.params.res);let nx,ny;
+    if(aspect>=1){nx=r;ny=Math.max(8,Math.round(r/aspect));}else{ny=r;nx=Math.max(8,Math.round(r*aspect));}return{nx:nx+1,ny:ny+1,aspect};}
+  function boardWD(){const a=S.aspect,s=S.params.size;return a>=1?{W:s,D:s/a}:{W:s*a,D:s};}
+  function resampleH(){if(!S.source||!S.H)return;const{nx,ny}=S;_rs.width=nx;_rs.height=ny;_rc.clearRect(0,0,nx,ny);
+    _rc.drawImage(S.source.canvas,0,0,nx,ny);const d=_rc.getImageData(0,0,nx,ny).data,H=S.H,inv=S.params.invert;
+    for(let i=0,p=0;i<nx*ny;i++,p+=4){const l=(0.299*d[p]+0.587*d[p+1]+0.114*d[p+2])/255;H[i]=inv?1-l:l;}}
+  function rebuildTopology(){
+    if(!S.source)return;const{nx,ny,aspect}=gridDims();S.nx=nx;S.ny=ny;S.aspect=aspect;S.H=new Float32Array(nx*ny);resampleH();
+    const topCount=nx*ny,vTotal=topCount+4+2*nx+2*ny,triTotal=(nx-1)*(ny-1)*2+2+(2*(nx-1)+2*(ny-1))*2;
+    const pos=new Float32Array(vTotal*3),nor=new Float32Array(vTotal*3),uv=new Float32Array(vTotal*2),
+          gU=new Float32Array(vTotal),gV=new Float32Array(vTotal),tI=new Int32Array(vTotal).fill(-1),
+          idx=(vTotal>65535)?new Uint32Array(triTotal*3):new Uint16Array(triTotal*3);
+    for(let iy=0;iy<ny;iy++)for(let ix=0;ix<nx;ix++){const v=iy*nx+ix;gU[v]=ix/(nx-1)-.5;gV[v]=iy/(ny-1)-.5;tI[v]=v;uv[v*2]=ix/(nx-1);uv[v*2+1]=1-iy/(ny-1);}
+    let ii=0;
+    for(let iy=0;iy<ny-1;iy++)for(let ix=0;ix<nx-1;ix++){const a=iy*nx+ix,b=a+1,c=a+nx,dd=c+1;idx[ii++]=a;idx[ii++]=c;idx[ii++]=b;idx[ii++]=b;idx[ii++]=c;idx[ii++]=dd;}
+    let vb=topCount;const cIdx=[];
+    for(const[u,w]of[[-.5,-.5],[.5,-.5],[.5,.5],[-.5,.5]]){gU[vb]=u;gV[vb]=w;nor[vb*3+1]=-1;uv[vb*2]=u+.5;uv[vb*2+1]=w+.5;cIdx.push(vb++);}
+    idx[ii++]=cIdx[0];idx[ii++]=cIdx[1];idx[ii++]=cIdx[2];idx[ii++]=cIdx[0];idx[ii++]=cIdx[2];idx[ii++]=cIdx[3];
+    function strip(refs,n){const bot=[];for(let k=0;k<refs.length;k++){const t=refs[k];gU[vb]=gU[t];gV[vb]=gV[t];nor[vb*3]=n[0];nor[vb*3+1]=n[1];nor[vb*3+2]=n[2];uv[vb*2]=k/(refs.length-1);uv[vb*2+1]=0;bot.push(vb++);}
+      for(let k=0;k<refs.length-1;k++){idx[ii++]=refs[k];idx[ii++]=bot[k];idx[ii++]=refs[k+1];idx[ii++]=refs[k+1];idx[ii++]=bot[k];idx[ii++]=bot[k+1];}}
+    let row;
+    row=[];for(let ix=0;ix<nx;ix++)row.push(ix);strip(row,[0,0,-1]);
+    row=[];for(let ix=0;ix<nx;ix++)row.push((ny-1)*nx+ix);strip(row,[0,0,1]);
+    row=[];for(let iy=0;iy<ny;iy++)row.push(iy*nx);strip(row,[-1,0,0]);
+    row=[];for(let iy=0;iy<ny;iy++)row.push(iy*nx+nx-1);strip(row,[1,0,0]);
+    const g=new T.BufferGeometry();
+    g.setAttribute('position',new T.BufferAttribute(pos,3));g.setAttribute('normal',new T.BufferAttribute(nor,3));g.setAttribute('uv',new T.BufferAttribute(uv,2));g.setIndex(new T.BufferAttribute(idx,1));
+    if(boardMesh){boardMesh.geometry.dispose();scn.remove(boardMesh);}
+    boardMesh=new T.Mesh(g,material);boardMesh.castShadow=true;boardMesh.receiveShadow=true;scn.add(boardMesh);
+    GEO={nx,ny,vTotal,pos,nor,gU,gV,tI,g};updateGeometry();
+  }
+  function updateGeometry(){
+    if(!GEO)return;const{nx,ny,vTotal,pos,nor,gU,gV,tI,g}=GEO;const{W,D}=boardWD();S.boardW=W;S.boardD=D;
+    const baseT=S.params.thick,hs=S.params.height,H=S.H;
+    for(let v=0;v<vTotal;v++){pos[v*3]=gU[v]*W;pos[v*3+2]=gV[v]*D;pos[v*3+1]=tI[v]>=0?baseT+H[tI[v]]*hs:0;}
+    const cellX=W/(nx-1),cellZ=D/(ny-1);
+    for(let iy=0;iy<ny;iy++){const iyU=Math.min(iy+1,ny-1),iyD=Math.max(iy-1,0);
+      for(let ix=0;ix<nx;ix++){const ixR=Math.min(ix+1,nx-1),ixL=Math.max(ix-1,0),v=iy*nx+ix;
+        const sx=(H[iy*nx+ixR]-H[iy*nx+ixL])*hs/((ixR-ixL)*cellX);
+        const sz=(H[iyU*nx+ix]-H[iyD*nx+ix])*hs/((iyU-iyD)*cellZ);
+        const iv=1/Math.hypot(sx,1,sz);nor[v*3]=-sx*iv;nor[v*3+1]=iv;nor[v*3+2]=-sz*iv;}}
+    g.attributes.position.needsUpdate=true;g.attributes.normal.needsUpdate=true;g.computeBoundingSphere();needsRender=true;
+  }
+  function setLight(){
+    const nx=S.params.lnx,ny=S.params.lny;
+    const az=(nx-0.5)*Math.PI*1.1,el=(6+ny*84)*Math.PI/180,R=800,ce=Math.cos(el);
+    key.position.set(R*ce*Math.sin(az),R*Math.sin(el),R*ce*Math.cos(az));
+    key.shadow.needsUpdate=true;needsRender=true;
+    const h=document.getElementById('lightHandle');if(h){h.style.left=(nx*100)+'%';h.style.top=((1-ny)*100)+'%';}
+    const lp=document.getElementById('lightPos');if(lp)lp.textContent=`az ${Math.round(az*180/Math.PI)}°  el ${Math.round(el*180/Math.PI)}°`;
+  }
+  function bindPad(){
+    const pad=document.getElementById('lightPad');let drag=false;
+    const set=e=>{const r=pad.getBoundingClientRect();S.params.lnx=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));S.params.lny=Math.max(0,Math.min(1,1-(e.clientY-r.top)/r.height));setLight();};
+    pad.addEventListener('pointerdown',e=>{drag=true;pad.setPointerCapture(e.pointerId);set(e);});
+    pad.addEventListener('pointermove',e=>{if(drag)set(e);});
+    window.addEventListener('pointerup',()=>drag=false);
+  }
+  function bindControls(){
+    const $=id=>document.getElementById(id);
+    $('bright').oninput=e=>{S.params.bright=e.target.value/100;key.intensity=S.params.bright;$('brightVal').textContent=S.params.bright.toFixed(1);needsRender=true;};
+    document.querySelectorAll('#matSeg button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#matSeg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');S.params.material=b.dataset.mat;document.getElementById('plainRow').style.display=b.dataset.mat==='plain'?'flex':'none';needMat=true;});
+    $('plainColor').oninput=e=>{S.params.plainColor=e.target.value;if(S.params.material==='plain'){material.color.set(e.target.value);needsRender=true;}};
+    $('lheight').oninput=e=>{S.params.height=+e.target.value;$('lheightVal').textContent=e.target.value;needGeo=true;};
+    $('lthick').oninput=e=>{S.params.thick=+e.target.value;$('lthickVal').textContent=e.target.value;needGeo=true;};
+    $('lres').oninput=e=>{S.params.res=+e.target.value;$('lresVal').textContent=e.target.value;needTopo=true;};
+    $('lspin').onchange=e=>{S.params.spin=e.target.checked;};
+    $('lstlBtn').onclick=exportStl;
+  }
+  function exportStl(){
+    if(!boardMesh)return;const geo=boardMesh.geometry,pos=geo.attributes.position.array,index=geo.index.array,tris=index.length/3;
+    const buf=new ArrayBuffer(84+tris*50),dv=new DataView(buf);let off=80;dv.setUint32(off,tris,true);off+=4;
+    const ax=new T.Vector3(),bx=new T.Vector3(),cx=new T.Vector3(),ab=new T.Vector3(),ac=new T.Vector3(),n=new T.Vector3();
+    for(let t=0;t<tris;t++){const i0=index[t*3]*3,i1=index[t*3+1]*3,i2=index[t*3+2]*3;
+      ax.set(pos[i0],pos[i0+1],pos[i0+2]);bx.set(pos[i1],pos[i1+1],pos[i1+2]);cx.set(pos[i2],pos[i2+1],pos[i2+2]);
+      ab.subVectors(bx,ax);ac.subVectors(cx,ax);n.crossVectors(ab,ac).normalize();
+      dv.setFloat32(off,n.x,true);dv.setFloat32(off+4,n.y,true);dv.setFloat32(off+8,n.z,true);off+=12;
+      for(const p of[ax,bx,cx]){dv.setFloat32(off,p.x,true);dv.setFloat32(off+4,p.y,true);dv.setFloat32(off+8,p.z,true);off+=12;}
+      dv.setUint16(off,0,true);off+=2;}
+    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'model/stl'}));a.download='relief_board.stl';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  }
+  function setSource(cv){ const first=!GEO; S.source={canvas:cv,w:cv.width,h:cv.height}; needTopo=true; if(first) setTimeout(frameCamera,0); }
+  function resize(){ if(!inited)return; const w=stage.clientWidth,h=stage.clientHeight; ren.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); needsRender=true; }
+  function loop(now){
+    requestAnimationFrame(loop);
+    if(!_active)return;
+    if(needMat){makeMaterial();needMat=false;}
+    if(needTopo){rebuildTopology();needTopo=false;needResample=false;needGeo=false;needsRender=true;}
+    else if(needResample){resampleH();updateGeometry();needResample=false;needGeo=false;}
+    else if(needGeo){updateGeometry();needGeo=false;}
+    if(S.params.spin&&boardMesh){cam.theta+=(now-last)*0.00025;applyCam();}
+    last=now;
+    if(needsRender){ren.render(scn,camera);needsRender=false;}
+  }
+  return {
+    ensure(){ if(!inited) init(); },
+    show(){ this.ensure(); _active=true; needsRender=true; },
+    hide(){ _active=false; },
+    feed(cv){ this.ensure(); setSource(cv); needsRender=true; },
+    resize(){ resize(); },
+    get active(){ return _active; }
+  };
+})();
+
+function litFeedRes(){ return 768; }
+function setViewMode(mode){
+  const litOn = mode==='lit';
+  stage.classList.toggle('lit', litOn);
+  document.getElementById('panel').classList.toggle('lit', litOn);
+  document.querySelectorAll('#viewTabs button').forEach(b=>b.classList.toggle('on', b.dataset.viewMode===mode));
+  if(litOn){ if(mesh) LIT.feed(depthToCanvas(litFeedRes())); LIT.show(); LIT.resize(); }
+  else LIT.hide();
+}
+function setupLit(){
+  const tabs=document.getElementById('viewTabs');
+  tabs.querySelectorAll('button').forEach(b=>b.onclick=()=>setViewMode(b.dataset.viewMode));
+  // everything not lit-specific is a depth control -> hide it on the Lit tab
+  document.querySelectorAll('#panel .grp').forEach(g=>{ if(!g.classList.contains('litonly')) g.classList.add('depthonly'); });
+  let t=null;
+  document.getElementById('panel').addEventListener('input',e=>{
+    if(!LIT.active || e.target.closest('.litonly')) return;   // depth-param change -> rebuild board
+    clearTimeout(t); t=setTimeout(()=>{ if(mesh) LIT.feed(depthToCanvas(litFeedRes())); }, 240);
+  });
+}
+
+initThree();
+animate();
+setupLit();
+
+function initThree(){
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2', {antialias:true, preserveDrawingBuffer:false});
+  renderer = new THREE.WebGLRenderer({canvas, context:gl||undefined, antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+  renderer.setClearColor(0x0d0f12, 1);
+  renderer.autoClear = false;                 // we clear + letterbox manually
+  stage.appendChild(canvas);
+
+  scene = new THREE.Scene();
+  cam = new THREE.OrthographicCamera(-1,1,1,-1,0.01,100);
+
+  matNormal = new THREE.MeshNormalMaterial({flatShading:false});
+
+  // translucent backing plane — the objective floor. Everything behind it
+  // reads as height 0. View-aligned; repositioned each frame in updateCamera.
+  planeMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(2,2),
+    new THREE.MeshBasicMaterial({color:0x5a616b, side:THREE.DoubleSide}));
+  planeMesh.visible = false;
+  scene.add(planeMesh);
+
+  // ceiling — the near wall of the depth window (glassy pane you can see through).
+  // Geometry in front of it is over the ceiling; rolloff compresses it below the top.
+  ceilMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(2,2),
+    new THREE.MeshBasicMaterial({color:0x86b3ff, transparent:true, opacity:0.16,
+      side:THREE.DoubleSide, depthWrite:false}));
+  ceilMesh.visible = false;
+  scene.add(ceilMesh);
+
+  // shared vertex chunk: pass view-space depth
+  const vert = `
+    varying float vD;
+    void main(){
+      vec4 mv = modelViewMatrix * vec4(position,1.0);
+      vD = -mv.z;
+      gl_Position = projectionMatrix * mv;
+    }`;
+  // on-screen preview: grayscale height with live curve
+  matPreview = new THREE.ShaderMaterial({
+    uniforms:{uNear:{value:0},uFar:{value:1},uInv:{value:0},uGamma:{value:1},
+              uPlane:{value:0},uCeil:{value:0},uRoll:{value:0},
+              uClipLo:{value:0},uClipHi:{value:1},uOutFloor:{value:0},uOutCeil:{value:0}},
+    vertexShader:vert,
+    fragmentShader:`
+      uniform float uNear,uFar,uInv,uGamma,uPlane,uCeil,uRoll,uClipLo,uClipHi,uOutFloor,uOutCeil; varying float vD;
+      void main(){
+        float d=clamp((vD-uNear)/(uFar-uNear),0.0,1.0);
+        d=clamp((d-uClipLo)/max(uClipHi-uClipLo,1e-4),0.0,1.0);  // robust range fill (live)
+        float t=(uInv>0.5)?d:1.0-d;                 // raw height, 1 = peak
+        float h=(t-uPlane)/max(1.0-uPlane,1e-4);    // backing plane clamps the floor
+        h=clamp(h,0.0,1.0);
+        float C=max(1.0-uCeil,1e-3), B=uRoll;       // ceiling window + rolloff band
+        h=(h<=C) ? (h/C)*(1.0-B)                     // face: full range up to 1-B
+                 : (1.0-B)+((h-C)/max(1.0-C,1e-3))*B;// over ceiling: scaled into top band
+        h=clamp(h,0.0,1.0);
+        h=pow(h,uGamma);
+        h=uOutFloor+h*max(1e-3,1.0-uOutFloor-uOutCeil);  // output-band compression (live)
+        gl_FragColor=vec4(vec3(h),1.0);
+      }`
+  });
+  // offscreen export: pack linear depth into RGB (24-bit)
+  matPack = new THREE.ShaderMaterial({
+    uniforms:{uNear:{value:0},uFar:{value:1}},
+    vertexShader:vert,
+    fragmentShader:`
+      uniform float uNear,uFar; varying float vD;
+      vec3 packDepth(float v){
+        v=clamp(v,0.0,0.999999);
+        vec3 e=fract(v*vec3(1.0,255.0,65025.0));
+        e-=e.yzz*vec3(1.0/255.0,1.0/255.0,0.0);
+        return e;
+      }
+      void main(){
+        float d=clamp((vD-uNear)/(uFar-uNear),0.0,1.0);
+        gl_FragColor=vec4(packDepth(d),1.0);
+      }`
+  });
+
+  window.addEventListener('resize', resize);
+  resize();
+  setupOrbit();
+  setupDnD();
+  setupUI();
+}
+
+function resize(){
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w,h,false);
+  const s = Math.min(w,h);                    // square export region, letterboxed
+  squareVP = { x:(w-s)/2, y:(h-s)/2, s };
+  reticle.setAttribute('viewBox',`0 0 ${w} ${h}`);
+  reticle.setAttribute('width',w); reticle.setAttribute('height',h);
+  LIT.resize();
+}
+
+// ---------------------------------------------------------------------------
+// Camera fitting  (orthographic, tight near/far, undistorted square frame)
+// ---------------------------------------------------------------------------
+// place the camera on the current orbit and return its inverse-world matrix
+function placeCamera(){
+  const dir = new THREE.Vector3(
+    Math.sin(phi)*Math.sin(theta), Math.cos(phi), Math.sin(phi)*Math.cos(theta));
+  cam.position.copy(center).addScaledVector(dir, fitRadius*3);
+  cam.up.set(0,1,0);
+  cam.lookAt(center);
+  cam.updateMatrixWorld();
+  return cam.matrixWorld.clone().invert();
+}
+
+// one-shot: size the fixed frame to enclose the model at the current angle
+function fit(){
+  if(!mesh) return;
+  mesh.updateMatrixWorld(true);
+  const vm = placeCamera();
+  let m = 1e-4; const p = new THREE.Vector3();
+  for(const c of corners){
+    p.copy(c).applyMatrix4(mesh.matrixWorld).applyMatrix4(vm);
+    m = Math.max(m, Math.abs(p.x), Math.abs(p.y));
+  }
+  baseHalf = m; zoom = 1;
+}
+
+function updateCamera(){
+  if(!mesh) return;
+  mesh.updateMatrixWorld(true);
+  const vm = placeCamera();
+
+  // frustum bounds from bbox corners — guarantees no geometry is clipped
+  let minZ=1e30,maxZ=-1e30;
+  const p = new THREE.Vector3();
+  for(const c of corners){
+    p.copy(c).applyMatrix4(mesh.matrixWorld).applyMatrix4(vm);
+    minZ=Math.min(minZ,p.z); maxZ=Math.max(maxZ,p.z);
+  }
+  // depth-normalisation range from the ACTUAL surface (sampled verts), so the
+  // tonal range isn't wasted on bbox-corner overshoot -> fills 0..1, less banding
+  const pos=mesh.geometry.attributes.position, nv=pos.count, arr=pos.array;
+  const stride=Math.max(1,Math.floor(nv/40000));
+  const M=vm.clone().multiply(mesh.matrixWorld), e=M.elements;
+  let nMin=1e30,nMax=-1e30;
+  for(let i=0;i<nv;i+=stride){
+    const o=i*3, x=arr[o],y=arr[o+1],z=arr[o+2];
+    const d=-(e[2]*x+e[6]*y+e[10]*z+e[14]);   // view-space depth of this vertex
+    if(d<nMin)nMin=d; if(d>nMax)nMax=d;
+  }
+  // fixed frame centred on the look target; zoom + padding scale it live
+  const half = Math.max(baseHalf,1e-4)*(1+ui.pad)/zoom;
+  cam.left=-half; cam.right=half; cam.top=half; cam.bottom=-half;
+  const nearDist=-maxZ, farDist=-minZ, eps=(farDist-nearDist)*1e-4+1e-5;
+  cam.near=Math.max(nearDist-eps,0.001); cam.far=farDist+eps;
+  cam.updateProjectionMatrix();
+  uNear=nMin; uFar=nMax;                        // tight surface range for normalisation
+
+  matPreview.uniforms.uNear.value=uNear; matPreview.uniforms.uFar.value=uFar;
+  matPack.uniforms.uNear.value=uNear;    matPack.uniforms.uFar.value=uFar;
+
+  // place the two window walls at their view-space depths, facing camera
+  const span=uFar-uNear;
+  const tPlane=ui.plane;                                  // floor level in raw-height t
+  const tCeil =ui.plane+(1-ui.ceil)*(1-ui.plane);         // ceiling level in raw-height t
+  const dFloor=ui.invert?tPlane:1-tPlane;                 // -> normalised depth d
+  const dCeil =ui.invert?tCeil :1-tCeil;
+  const viewAxis = new THREE.Vector3().subVectors(center, cam.position).normalize();
+  const putWall=(m,dN)=>{
+    m.position.copy(cam.position).addScaledVector(viewAxis, uNear+dN*span);
+    m.quaternion.copy(cam.quaternion);
+    m.scale.set(half*1.2, half*1.2, 1);
+  };
+  putWall(planeMesh, dFloor);
+  putWall(ceilMesh,  dCeil);
+
+  const rng=(uFar-uNear)*modelScale;
+  document.getElementById('statDepth').textContent = rng ? rng.toPrecision(4)+' u' : '—';
+  badge.innerHTML = mesh
+    ? `θ ${(theta*57.2958).toFixed(0)}°  φ ${(phi*57.2958).toFixed(0)}°<br>Z extent <b>${rng.toPrecision(4)}</b> units &rarr; 0…${ui.bit===8?255:65535}`
+    : '';
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  const litOn = LIT.active;
+  if(mesh && !litOn){
+    updateCamera();
+    matPreview.uniforms.uInv.value=ui.invert?1:0;
+    matPreview.uniforms.uGamma.value=ui.gamma;
+    matPreview.uniforms.uPlane.value=ui.plane;
+    matPreview.uniforms.uCeil.value=ui.ceil;
+    matPreview.uniforms.uRoll.value=ui.roll;
+    matPreview.uniforms.uClipLo.value=ui._clipLo;
+    matPreview.uniforms.uClipHi.value=ui._clipHi;
+    matPreview.uniforms.uOutFloor.value=ui.outFloor;
+    matPreview.uniforms.uOutCeil.value=ui.outCeil;
+    if(ui.preview){                                   // clip cut-points depend on view -> refresh when it moves
+      const sig=theta.toFixed(3)+phi.toFixed(3)+xf.mx+xf.my+xf.mz+xf.rx+xf.ry+xf.rz;
+      if(sig!==lastClipSig){ lastClipSig=sig; scheduleClipRange(); }
+    }
+    scene.overrideMaterial = ui.preview ? matPreview : null;
+    mesh.material = ui.preview ? matPreview : matNormal;
+    const showWin = ui.showPlane && !ui.preview;          // indicators only; effect is baked in
+    planeMesh.visible = showWin;
+    ceilMesh.visible  = showWin && ui.ceil>0;             // only when the ceiling is in use
+  }
+  if(litOn) return;                            // lit view renders on its own isolated context
+  const vp = squareVP;
+  renderer.setScissorTest(false);
+  renderer.clear();                            // fill whole canvas (letterbox)
+  renderer.setViewport(vp.x, vp.y, vp.s, vp.s);
+  renderer.setScissor(vp.x, vp.y, vp.s, vp.s);
+  renderer.setScissorTest(true);
+  renderer.render(scene,cam);
+  renderer.setScissorTest(false);
+}
+
+// ---------------------------------------------------------------------------
+// Model loading
+// ---------------------------------------------------------------------------
+function loadGeometry(geo){
+  if(mesh){ scene.remove(mesh); mesh.geometry.dispose(); }
+  geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  const bb=geo.boundingBox, c=new THREE.Vector3(); bb.getCenter(c);
+  geo.translate(-c.x,-c.y,-c.z);              // center at origin
+  geo.computeBoundingBox(); geo.computeBoundingSphere();
+
+  mesh=new THREE.Mesh(geo,matNormal); scene.add(mesh);
+  center.set(0,0,0);
+  fitRadius=geo.boundingSphere.radius;
+  modelScale=1;                               // 1 unit = 1 model unit (as imported)
+
+  const bb2=geo.boundingBox;
+  corners=[];
+  for(const x of [bb2.min.x,bb2.max.x])
+    for(const y of [bb2.min.y,bb2.max.y])
+      for(const z of [bb2.min.z,bb2.max.z])
+        corners.push(new THREE.Vector3(x,y,z));
+
+  const tris=geo.attributes.position.count/3;
+  document.getElementById('statTris').textContent=tris.toLocaleString();
+  hintEl.classList.add('hide');
+  stage.classList.add('hasmodel');
+  document.getElementById('genBtn').disabled=false;
+  resetTransform();
+  setView('iso');
+  fit();
+  if(LIT.active) LIT.feed(depthToCanvas(litFeedRes()));
+}
+
+// ---- model transform (menu-driven; pivot = centred origin) ----
+function applyTransform(){
+  if(!mesh) return;
+  const scale = 2*fitRadius;                  // slider -100..100  ->  ±2·radius
+  mesh.position.set(xf.mx*scale/100, xf.my*scale/100, xf.mz*scale/100);
+  mesh.rotation.set(xf.rx, xf.ry, xf.rz);
+  const $=id=>document.getElementById(id), u=v=>(v*scale/100);
+  $('mxVal').textContent=u(xf.mx).toPrecision(3);
+  $('myVal').textContent=u(xf.my).toPrecision(3);
+  $('mzVal').textContent=u(xf.mz).toPrecision(3);
+  $('rxVal').textContent=Math.round(xf.rx*57.2958)+'\u00b0';
+  $('ryVal').textContent=Math.round(xf.ry*57.2958)+'\u00b0';
+  $('rzVal').textContent=Math.round(xf.rz*57.2958)+'\u00b0';
+}
+function resetTransform(){
+  xf.mx=xf.my=xf.mz=xf.rx=xf.ry=xf.rz=0;
+  ['mx','my','mz','rx','ry','rz'].forEach(id=>{const el=document.getElementById(id); if(el) el.value=0;});
+  applyTransform();
+}
+
+function handleFile(file){
+  const name=file.name.toLowerCase();
+  const rd=new FileReader();
+  rd.onload=e=>{
+    try{
+      let geo;
+      if(name.endsWith('.stl')) geo=parseSTL(e.target.result);
+      else if(name.endsWith('.obj')) geo=parseOBJ(new TextDecoder().decode(new Uint8Array(e.target.result)));
+      else { alert('Unsupported file. Use .stl or .obj'); return; }
+      if(!geo || geo.attributes.position.count===0){ alert('No geometry found in file.'); return; }
+      loadGeometry(geo);
+    }catch(err){ console.error(err); alert('Failed to parse: '+err.message); }
+  };
+  rd.readAsArrayBuffer(file);
+}
+
+// ---- STL (binary + ASCII) ----
+function parseSTL(buf){
+  const dv=new DataView(buf);
+  // binary heuristic: header(80)+count(4)+50*n == length
+  const n=buf.byteLength>=84?dv.getUint32(80,true):0;
+  const isBinary = buf.byteLength===84+n*50 && buf.byteLength>84;
+  const pos=[];
+  if(isBinary){
+    let o=84;
+    for(let i=0;i<n;i++){
+      o+=12; // skip face normal
+      for(let v=0;v<3;v++){ pos.push(dv.getFloat32(o,true),dv.getFloat32(o+4,true),dv.getFloat32(o+8,true)); o+=12; }
+      o+=2;
+    }
+  } else {
+    const txt=new TextDecoder().decode(new Uint8Array(buf));
+    const re=/vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)/g; let m;
+    while((m=re.exec(txt))) pos.push(+m[1],+m[2],+m[3]);
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  return g;
+}
+
+// ---- OBJ (v / f, triangulate polygons, ignore vt/vn) ----
+function parseOBJ(txt){
+  const verts=[], pos=[]; const lines=txt.split(/\r?\n/);
+  for(const line of lines){
+    if(line[0]==='v' && line[1]===' '){
+      const p=line.trim().split(/\s+/); verts.push([+p[1],+p[2],+p[3]]);
+    } else if(line[0]==='f' && line[1]===' '){
+      const idx=line.trim().split(/\s+/).slice(1).map(t=>{
+        let i=parseInt(t.split('/')[0],10); if(i<0) i=verts.length+i+1; return i-1;
+      });
+      for(let k=1;k<idx.length-1;k++){        // fan triangulation
+        for(const vi of [idx[0],idx[k],idx[k+1]]){
+          const v=verts[vi]; if(v) pos.push(v[0],v[1],v[2]);
+        }
+      }
+    }
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  return g;
+}
+
+// ---------------------------------------------------------------------------
+// Relief post-processing (CPU): de-step flats, then deepen transitions
+// ---------------------------------------------------------------------------
+function gaussBlur(src,w,h,radius){            // separable Gaussian, edge-clamped
+  radius=Math.max(1,Math.round(radius));
+  const sig=radius/2, k=[]; let ksum=0;
+  for(let i=-radius;i<=radius;i++){const v=Math.exp(-(i*i)/(2*sig*sig));k.push(v);ksum+=v;}
+  for(let i=0;i<k.length;i++)k[i]/=ksum;
+  const tmp=new Float32Array(w*h), dst=new Float32Array(w*h);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    let a=0;for(let i=-radius;i<=radius;i++){let xx=x+i;if(xx<0)xx=0;if(xx>=w)xx=w-1;a+=src[y*w+xx]*k[i+radius];}
+    tmp[y*w+x]=a;
+  }
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    let a=0;for(let i=-radius;i<=radius;i++){let yy=y+i;if(yy<0)yy=0;if(yy>=h)yy=h-1;a+=tmp[yy*w+x]*k[i+radius];}
+    dst[y*w+x]=a;
+  }
+  return dst;
+}
+// large low-frequency blur via downsample -> small gaussian -> bilinear upsample.
+// O(n) regardless of radius and resolution-independent (base scale set by `frac`).
+function bigBlur(src,w,h,frac){
+  const dw=Math.max(8,Math.min(192,Math.round(w*0.12))), dh=Math.max(8,Math.round(dw*h/w));
+  const small=new Float32Array(dw*dh);
+  for(let y=0;y<dh;y++)for(let x=0;x<dw;x++){
+    const sx=Math.min(w-1,Math.floor((x+0.5)*w/dw)), sy=Math.min(h-1,Math.floor((y+0.5)*h/dh));
+    small[y*dw+x]=src[sy*w+sx];
+  }
+  const sb=gaussBlur(small,dw,dh,Math.max(1,Math.round(frac*dw)));
+  const dst=new Float32Array(w*h);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const gx=(x+0.5)*dw/w-0.5, gy=(y+0.5)*dh/h-0.5;
+    let x0=Math.floor(gx),y0=Math.floor(gy); const fx=gx-x0,fy=gy-y0;
+    const x1=Math.min(dw-1,Math.max(0,x0+1)),y1=Math.min(dh-1,Math.max(0,y0+1));
+    x0=Math.min(dw-1,Math.max(0,x0)); y0=Math.min(dh-1,Math.max(0,y0));
+    const a=sb[y0*dw+x0],b=sb[y0*dw+x1],c=sb[y1*dw+x0],d=sb[y1*dw+x1];
+    dst[y*w+x]=a*(1-fx)*(1-fy)+b*fx*(1-fy)+c*(1-fx)*fy+d*fx*fy;
+  }
+  return dst;
+}
+function reliefProcess(src,w,h,smooth,edge,edgeW,detailSize,baseComp,detailG){
+  let s=src;
+  if(smooth>0){ s=gaussBlur(src,w,h,Math.max(1,Math.round(smooth*4))); }   // small blur -> de-step
+  if(baseComp>0 || detailG>1){                       // local-contrast: compress base, keep/boost detail
+    const frac=0.03+detailSize*0.35;                 // how large a feature counts as "base"
+    const base=bigBlur(s,w,h,frac), bg=1-baseComp, out=new Float32Array(w*h);
+    for(let i=0;i<out.length;i++) out[i]=base[i]*bg+(s[i]-base[i])*detailG;
+    let mn=Infinity,mx=-Infinity;                    // renormalise so the balanced range fills 0..1
+    for(let i=0;i<out.length;i++){const v=out[i];if(v<mn)mn=v;if(v>mx)mx=v;}
+    const sp=(mx-mn)>1e-6?1/(mx-mn):1;
+    for(let i=0;i<out.length;i++) out[i]=(out[i]-mn)*sp;
+    s=out;
+  }
+  if(edge>0){                                                              // unsharp -> deepen transitions
+    const L=gaussBlur(s,w,h,Math.max(1,Math.round(edgeW)));
+    const dst=new Float32Array(w*h);
+    for(let i=0;i<dst.length;i++){let v=s[i]+edge*(s[i]-L[i]);dst[i]=v<0?0:v>1?1:v;}
+    return dst;
+  }
+  return s;
+}
+
+// low-res histogram prepass -> clip cut-points for the LIVE depth preview shader
+let _clipTimer=null;
+function scheduleClipRange(){ clearTimeout(_clipTimer); _clipTimer=setTimeout(updateClipRange,120); }
+function updateClipRange(){
+  if(!mesh) return;
+  const R=256;
+  const rt=new THREE.WebGLRenderTarget(R,R,{minFilter:THREE.NearestFilter,magFilter:THREE.NearestFilter,
+    format:THREE.RGBAFormat,type:THREE.UnsignedByteType,depthBuffer:true,stencilBuffer:false});
+  const pOv=scene.overrideMaterial,pMat=mesh.material,pPl=planeMesh.visible,pCe=ceilMesh.visible;
+  scene.overrideMaterial=matPack; mesh.material=matPack; planeMesh.visible=false; ceilMesh.visible=false;
+  updateCamera();
+  renderer.setRenderTarget(rt); renderer.setScissorTest(false); renderer.setClearColor(0xff0000,1); renderer.clear(); renderer.render(scene,cam);
+  const raw=new Uint8Array(R*R*4); renderer.readRenderTargetPixels(rt,0,0,R,R,raw);
+  renderer.setRenderTarget(null); renderer.setClearColor(0x0d0f12,1);
+  scene.overrideMaterial=pOv; mesh.material=pMat; planeMesh.visible=pPl; ceilMesh.visible=pCe; rt.dispose();
+  const NB=4096, hist=new Uint32Array(NB); let fgN=0;
+  for(let i=0;i<R*R;i++){ const o=i*4, d=raw[o]/255+raw[o+1]/65025+raw[o+2]/16581375; if(d<0.999){ hist[Math.min(NB-1,(d*NB)|0)]++; fgN++; } }
+  let dLo=0,dHi=1;
+  if(fgN>0){
+    const clipLo=ui.rangeClipLo/100, clipHi=ui.rangeClipHi/100;
+    const loFrac=ui.invert?clipLo:clipHi, hiFrac=ui.invert?clipHi:clipLo;
+    const loT=fgN*loFrac, hiT=fgN*(1-hiFrac);
+    let c=0; for(let b=0;b<NB;b++){ c+=hist[b]; if(c>=loT){dLo=b/NB;break;} }
+    c=0;      for(let b=0;b<NB;b++){ c+=hist[b]; if(c>=hiT){dHi=(b+1)/NB;break;} }
+    if(dHi-dLo<1e-4) dHi=dLo+1e-4;
+  }
+  ui._clipLo=dLo; ui._clipHi=dHi;
+}
+
+// ---------------------------------------------------------------------------
+// Core: render packed depth offscreen, decode + curve + spatial -> Float32 height
+// Used by both the PNG export and the lit-preview feed (identical processing).
+// ---------------------------------------------------------------------------
+function computeHeightBuffer(res, ss){
+  const N=res*ss;
+  const rt=new THREE.WebGLRenderTarget(N,N,{
+    minFilter:THREE.NearestFilter, magFilter:THREE.NearestFilter,
+    format:THREE.RGBAFormat, type:THREE.UnsignedByteType,
+    depthBuffer:true, stencilBuffer:false});
+  const prevOverride=scene.overrideMaterial, prevMat=mesh.material,
+        prevPlaneVis=planeMesh.visible, prevCeilVis=ceilMesh.visible;
+  scene.overrideMaterial=matPack; mesh.material=matPack;
+  planeMesh.visible=false; ceilMesh.visible=false;
+  updateCamera();
+  renderer.setRenderTarget(rt);
+  renderer.setScissorTest(false);          // full square target, no letterbox
+  renderer.setClearColor(0xff0000,1);      // pure red decodes to depth=1 (background floor)
+  renderer.clear();
+  renderer.render(scene,cam);
+
+  const raw=new Uint8Array(N*N*4);
+  renderer.readRenderTargetPixels(rt,0,0,N,N,raw);
+
+  renderer.setRenderTarget(null);
+  renderer.setClearColor(0x0d0f12,1);
+  scene.overrideMaterial=prevOverride; mesh.material=prevMat;
+  planeMesh.visible=prevPlaneVis; ceilMesh.visible=prevCeilVis;
+  rt.dispose();
+
+  // robust range: near/far percentiles of the actual foreground depth
+  const NB=4096, hist=new Uint32Array(NB); let fgN=0;
+  for(let i=0;i<N*N;i++){
+    const o=i*4, d=raw[o]/255+raw[o+1]/65025+raw[o+2]/16581375;
+    if(d<0.999){ hist[Math.min(NB-1,(d*NB)|0)]++; fgN++; }
+  }
+  let dLo=0,dHi=1;
+  if(fgN>0){
+    // clipHi trims the tall/bright end, clipLo the deep/dark end — map to the
+    // correct depth-histogram side depending on inversion so labels stay true
+    const clipLo=ui.rangeClipLo/100, clipHi=ui.rangeClipHi/100;
+    const loFrac=ui.invert?clipLo:clipHi, hiFrac=ui.invert?clipHi:clipLo;
+    const loT=fgN*loFrac, hiT=fgN*(1-hiFrac);
+    let c=0; for(let b=0;b<NB;b++){ c+=hist[b]; if(c>=loT){dLo=b/NB;break;} }
+    c=0;      for(let b=0;b<NB;b++){ c+=hist[b]; if(c>=hiT){dHi=(b+1)/NB;break;} }
+    if(dHi-dLo<1e-4) dHi=dLo+1e-4;
+  }
+  const dSpan=dHi-dLo;
+
+  // decode -> height, flip Y, downsample, apply curve (matches preview shader)
+  const inv=ui.invert, g=ui.gamma, pl=ui.plane, C=Math.max(1-ui.ceil,1e-3), B=ui.roll;
+  const heightAt=(x,y)=>{                  // y in render space (bottom-up)
+    const o=(y*N+x)*4;
+    let d=raw[o]/255+raw[o+1]/65025+raw[o+2]/16581375;
+    d=(d-dLo)/dSpan; if(d<0)d=0; if(d>1)d=1;   // robust range fill
+    let t=inv?d:1-d;
+    let h=(t-pl)/Math.max(1-pl,1e-4); if(h<0)h=0; if(h>1)h=1;
+    h=(h<=C) ? (h/C)*(1-B)                       // face: full range up to 1-B
+             : (1-B)+((h-C)/Math.max(1-C,1e-3))*B; // over ceiling: scaled into top band
+    if(h<0)h=0; if(h>1)h=1;
+    return Math.pow(h,g);
+  };
+  let out=new Float32Array(res*res);
+  for(let y=0;y<res;y++){
+    for(let x=0;x<res;x++){
+      let acc=0;
+      for(let sy=0;sy<ss;sy++) for(let sx=0;sx<ss;sx++)
+        acc+=heightAt(x*ss+sx, N-1-(y*ss+sy));   // flip Y here
+      out[y*res+x]=acc/(ss*ss);
+    }
+  }
+  out = reliefProcess(out, res, res, ui.smooth, ui.edge, ui.edgeW, ui.detailSize, ui.baseComp, ui.detailG);
+  // output-band compression: lift the floor / drop the ceiling (physical carve limits)
+  if(ui.outFloor>0 || ui.outCeil>0){
+    const fl=ui.outFloor, sp=Math.max(1e-3, 1-ui.outFloor-ui.outCeil);
+    for(let i=0;i<out.length;i++) out[i]=fl+out[i]*sp;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Export  (compute height buffer -> dither -> 16/8-bit PNG)
+// ---------------------------------------------------------------------------
+function generate(){
+  if(!mesh) return;
+  const btn=document.getElementById('genBtn');
+  const res=parseInt(document.getElementById('res').value,10);
+  const ss=ui.ss, N=res*ss;
+  const MAX=renderer.capabilities.maxTextureSize||8192;
+  if(N>MAX){ alert(`Render size ${N} exceeds this GPU's limit (${MAX}). Lower resolution or supersample.`); return; }
+  btn.textContent='Rendering…'; btn.disabled=true;
+
+  requestAnimationFrame(()=>{                 // let UI paint
+    try{
+      let out=computeHeightBuffer(res, ss);
+      const bit=ui.bit;
+      if(ui.dither){                            // triangular dither -> breaks contour banding
+        const L=(1<<bit)-1;
+        for(let i=0;i<out.length;i++){
+          let v=out[i]+(Math.random()-Math.random())/L;
+          out[i]=v<0?0:v>1?1:v;
+        }
+      }
+      const blob=encodePNGGray(out,res,res,bit);
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download=`depthmap_${res}px_${bit}bit.png`; a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);
+    }catch(err){ console.error(err); alert('Export failed: '+err.message); }
+    btn.textContent='Generate depth map'; btn.disabled=false;
+  });
+}
+
+// build a grayscale canvas from the current depth (feeds the lit preview)
+function depthToCanvas(res){
+  const out=computeHeightBuffer(res, 1);
+  const cv=document.createElement('canvas'); cv.width=res; cv.height=res;
+  const im=cv.getContext('2d').createImageData(res,res);
+  for(let i=0;i<res*res;i++){
+    const v=Math.max(0,Math.min(255,Math.round(out[i]*255)));
+    im.data[i*4]=im.data[i*4+1]=im.data[i*4+2]=v; im.data[i*4+3]=255;
+  }
+  cv.getContext('2d').putImageData(im,0,0);
+  return cv;
+}
+
+// ---- PNG encoder (grayscale, 8 or 16 bit) ----
+const CRC=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
+function crc32(buf){let c=0xffffffff;for(let i=0;i<buf.length;i++)c=CRC[(c^buf[i])&255]^(c>>>8);return (c^0xffffffff)>>>0;}
+function chunk(type,data){
+  const len=data.length, out=new Uint8Array(12+len), dv=new DataView(out.buffer);
+  dv.setUint32(0,len); for(let i=0;i<4;i++)out[4+i]=type.charCodeAt(i);
+  out.set(data,8); dv.setUint32(8+len,crc32(out.subarray(4,8+len))); return out;
+}
+function encodePNGGray(height01,w,h,bit){
+  const bpp=bit===16?2:1;
+  const raw=new Uint8Array(h*(1+w*bpp));
+  let p=0;
+  for(let y=0;y<h;y++){
+    raw[p++]=0;                               // filter: none
+    for(let x=0;x<w;x++){
+      const v=height01[y*w+x];
+      if(bit===16){ const u=Math.max(0,Math.min(65535,Math.round(v*65535))); raw[p++]=u>>8; raw[p++]=u&255; }
+      else { raw[p++]=Math.max(0,Math.min(255,Math.round(v*255))); }
+    }
+  }
+  const idat=pako.deflate(raw,{level:6});
+  const ihdr=new Uint8Array(13), dv=new DataView(ihdr.buffer);
+  dv.setUint32(0,w); dv.setUint32(4,h); ihdr[8]=bit; ihdr[9]=0; ihdr[10]=0; ihdr[11]=0; ihdr[12]=0;
+  const sig=new Uint8Array([137,80,78,71,13,10,26,10]);
+  const parts=[sig,chunk('IHDR',ihdr),chunk('IDAT',idat),chunk('IEND',new Uint8Array(0))];
+  let tot=0; parts.forEach(a=>tot+=a.length);
+  const png=new Uint8Array(tot); let off=0; parts.forEach(a=>{png.set(a,off);off+=a.length;});
+  return new Blob([png],{type:'image/png'});
+}
+
+// ---------------------------------------------------------------------------
+// Interaction
+// ---------------------------------------------------------------------------
+function setupOrbit(){
+  let down=false,px=0,py=0;
+  stage.addEventListener('pointerdown',e=>{if(LIT.active||e.target.closest('#viewToggle'))return;down=true;px=e.clientX;py=e.clientY;stage.setPointerCapture(e.pointerId);});
+  stage.addEventListener('pointermove',e=>{
+    if(!down||LIT.active)return;
+    theta-=(e.clientX-px)*0.008; phi-=(e.clientY-py)*0.008;
+    phi=Math.max(0.02,Math.min(Math.PI-0.02,phi));
+    px=e.clientX; py=e.clientY;
+  });
+  stage.addEventListener('pointerup',e=>{down=false;});
+  stage.addEventListener('wheel',e=>{
+    if(LIT.active)return;
+    e.preventDefault();
+    zoom *= (e.deltaY<0 ? 1.1 : 1/1.1);
+    zoom = Math.max(0.05, Math.min(50, zoom));
+  }, {passive:false});
+}
+function setView(v){
+  const d={top:[0.001,0],front:[Math.PI/2,0],back:[Math.PI/2,Math.PI],
+           left:[Math.PI/2,-Math.PI/2],right:[Math.PI/2,Math.PI/2],iso:[Math.PI*0.32,Math.PI*0.25]};
+  if(d[v]){phi=d[v][0];theta=d[v][1];}
+}
+function setupDnD(){
+  ['dragenter','dragover'].forEach(ev=>stage.addEventListener(ev,e=>{e.preventDefault();veil.classList.add('show');}));
+  ['dragleave','drop'].forEach(ev=>stage.addEventListener(ev,e=>{e.preventDefault();veil.classList.remove('show');}));
+  stage.addEventListener('drop',e=>{const f=e.dataTransfer.files[0]; if(f) handleFile(f);});
+}
+function setupUI(){
+  const $=id=>document.getElementById(id);
+  $('importBtn').onclick=()=>$('file').click();
+  $('file').onchange=e=>{const f=e.target.files[0]; if(f) handleFile(f);};
+  $('genBtn').onclick=generate;
+  document.querySelectorAll('.views button').forEach(b=>b.onclick=()=>{setView(b.dataset.view);fit();});
+  $('fitBtn').onclick=fit;
+  $('resetXform').onclick=resetTransform;
+  const bindMove=(id,key)=>$(id).oninput=e=>{xf[key]=+e.target.value;applyTransform();};
+  const bindRot =(id,key)=>$(id).oninput=e=>{xf[key]=(+e.target.value)*Math.PI/180;applyTransform();};
+  bindMove('mx','mx');bindMove('my','my');bindMove('mz','mz');
+  bindRot('rx','rx');bindRot('ry','ry');bindRot('rz','rz');
+  $('previewChk').onchange=e=>{ui.preview=e.target.checked; if(ui.preview) scheduleClipRange();};
+  $('invertChk').onchange=e=>{ui.invert=e.target.checked; scheduleClipRange();};
+  $('pad').oninput=e=>{ui.pad=e.target.value/100;$('padVal').textContent=e.target.value+'%';};
+  $('gamma').oninput=e=>{ui.gamma=e.target.value/100;$('gammaVal').textContent=ui.gamma.toFixed(2);};
+  $('plane').oninput=e=>{ui.plane=e.target.value/100;$('planeVal').textContent=e.target.value+'%';};
+  $('ceil').oninput=e=>{ui.ceil=e.target.value/100;$('ceilVal').textContent=e.target.value+'%';};
+  $('roll').oninput=e=>{ui.roll=e.target.value/100;$('rollVal').textContent=e.target.value+'%';};
+  $('smooth').oninput=e=>{ui.smooth=e.target.value/100;$('smoothVal').textContent=e.target.value;};
+  $('edge').oninput=e=>{ui.edge=e.target.value/100;$('edgeVal').textContent=ui.edge.toFixed(1);};
+  $('edgeW').oninput=e=>{ui.edgeW=+e.target.value;$('edgeWVal').textContent=e.target.value+'px';};
+  $('detailG').oninput=e=>{ui.detailG=1+e.target.value/100*2;$('detailGVal').textContent=e.target.value;};
+  $('baseComp').oninput=e=>{ui.baseComp=e.target.value/100;$('baseCompVal').textContent=e.target.value+'%';};
+  $('detailSize').oninput=e=>{ui.detailSize=e.target.value/100;$('detailSizeVal').textContent=e.target.value;};
+  $('showPlaneChk').onchange=e=>ui.showPlane=e.target.checked;
+  $('rangeClipHi').oninput=e=>{ui.rangeClipHi=e.target.value/10;$('rangeClipHiVal').textContent=(e.target.value/10).toFixed(1)+'%';scheduleClipRange();};
+  $('rangeClipLo').oninput=e=>{ui.rangeClipLo=e.target.value/10;$('rangeClipLoVal').textContent=(e.target.value/10).toFixed(1)+'%';scheduleClipRange();};
+  $('outFloor').oninput=e=>{ui.outFloor=e.target.value/100;$('outFloorVal').textContent=e.target.value+'%';};
+  $('outCeil').oninput=e=>{ui.outCeil=e.target.value/100;$('outCeilVal').textContent=e.target.value+'%';};
+  $('ditherChk').onchange=e=>ui.dither=e.target.checked;
+  ui.bit=16; ui.ss=1;
+  document.querySelectorAll('#bitSeg button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#bitSeg button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); ui.bit=+b.dataset.bit;});
+  document.querySelectorAll('#ssSeg button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#ssSeg button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); ui.ss=+b.dataset.ss;});
+}
+</script>
+</body>
+</html>
